@@ -338,38 +338,11 @@ class _XarrayStorage(_DiskStorage):
         return result
 
     def _merge_data_arrays(self, data_arrays):
-        # # https://stackoverflow.com/a/50125997/2225200
-        # merged = xr.merge([similarity.rename('z') for similarity in data_arrays])['z'].rename(None)
-        # # ensure same class
+        # https://stackoverflow.com/a/50125997/2225200
+        merged = xr.merge([similarity.rename('z') for similarity in data_arrays])['z'].rename(None)
 
-        from brainio.assemblies import walk_coords
-        nonneuroid_coords = {coord: (dims, values) for coord, dims, values in walk_coords(data_arrays[0])
-                             if set(dims) != {'neuroid'}}
-        neuroid_coords = [(coord, dims) for layer_assembly in data_arrays for coord, dims, values in walk_coords(layer_assembly)
-                             if set(dims) == {'neuroid'} and coord!='neuroid']
-        neuroid_coord_names = set(neuroid_coords)
-        neuroid_coords = {}
-
-        for layer_assembly in data_arrays:
-            for coord, _ in neuroid_coord_names:
-                try:
-                    coord_values = layer_assembly[coord].values
-                except KeyError:
-                    coord_values = np.full(layer_assembly.sizes['neuroid'], -1, dtype=int)
-                neuroid_coords.setdefault(coord, []).append(coord_values)
-
-            assert data_arrays[0].dims == layer_assembly.dims
-            for dim in set(layer_assembly.dims) - {'neuroid'}:
-                for coord, _, _ in walk_coords(layer_assembly[dim]):
-                    assert (layer_assembly[coord].values == data_arrays[0][coord].values).all()
-
-        for coord, dims in neuroid_coord_names:
-            neuroid_coords[coord] = (dims, np.concatenate(neuroid_coords[coord]))
-
-        combined = np.concatenate([a.values for a in data_arrays], axis=data_arrays[0].dims.index('neuroid'))
-        combined = type(data_arrays[0])(combined, coords={**nonneuroid_coords, **neuroid_coords},dims=data_arrays[0].dims)
-
-        return combined
+        # ensure same class
+        return type(data_arrays[0])(merged)
 
     def ensure_callargs_present(self, result, infile_call_args):
         # make sure coords are set equal to call_args
