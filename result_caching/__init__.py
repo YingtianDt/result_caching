@@ -467,8 +467,41 @@ def get_calling_function():
     raise AttributeError("func not found")
 
 
+class _XarrayLayerStorage(_XarrayStorage):
+    def _merge_data_arrays(self, data_arrays):
+        from brainio.assemblies import walk_coords
+
+        nonneuroid_coords = {coord: (dims, values) for coord, dims, values in walk_coords(data_arrays[0])
+                             if set(dims) != {'neuroid'}}
+        neuroid_coords = [(coord, dims) for data_array in data_arrays for coord, dims, values in walk_coords(data_array)
+                             if set(dims) == {'neuroid'} and coord!='neuroid']
+        neuroid_coord_names = set(neuroid_coords)
+        neuroid_coords = {}
+
+        for data_array in data_arrays:
+            for coord, _ in neuroid_coord_names:
+                try:
+                    coord_values = data_array[coord].values
+                except KeyError:
+                    coord_values = np.full(data_array.sizes['neuroid'], -1, dtype=int)
+                neuroid_coords.setdefault(coord, []).append(coord_values)
+
+            assert data_arrays[0].dims == data_array.dims
+            for dim in set(data_array.dims) - {'neuroid'}:
+                for coord, _, _ in walk_coords(data_array[dim]):
+                    assert (data_array[coord].values == data_arrays[0][coord].values).all()
+
+        for coord, dims in neuroid_coord_names:
+            neuroid_coords[coord] = (dims, np.concatenate(neuroid_coords[coord]))
+
+        merged = np.concatenate([a.values for a in data_arrays], axis=data_arrays[0].dims.index('neuroid'))
+        merged = type(data_arrays[0])(merged, coords={**nonneuroid_coords, **neuroid_coords},dims=data_arrays[0].dims)
+        return merged
+
+
 cache = _MemoryStorage
 store = _DiskStorage
 store_dict = _DictStorage
-store_xarray = _XarrayStorage
+# store_xarray = _XarrayStorage
 store_netcdf = _NetcdfStorage
+store_xarray = _XarrayLayerStorage
