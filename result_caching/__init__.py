@@ -38,6 +38,11 @@ def is_enabled(function_identifier):
     return not _match_identifier(function_identifier, disable)
 
 
+def is_overwrite(function_identifier):
+    overwrite = os.getenv('RESULTCACHING_OVERWRITE', '0')
+    return _match_identifier(function_identifier, overwrite)
+
+
 def cached_only(function_identifier):
     cachedonly = os.getenv('RESULTCACHING_CACHEDONLY', '0')
     return _match_identifier(function_identifier, cachedonly)
@@ -78,7 +83,8 @@ class _Storage(object):
                 raise NotCachedError(f"No result stored for '{function_identifier}'")
             self._logger.debug("Running function: {}".format(function_identifier))
             result = function(*args, **kwargs)
-            if is_enabled(function_identifier):
+            if is_enabled(function_identifier) or is_overwrite(function_identifier):
+                print("Overwriting results...")
                 self._logger.debug("Saving to storage: {}".format(function_identifier))
                 self.save(result, function_identifier)
             return result
@@ -332,10 +338,38 @@ class _XarrayStorage(_DiskStorage):
         return result
 
     def _merge_data_arrays(self, data_arrays):
-        # https://stackoverflow.com/a/50125997/2225200
-        merged = xr.merge([similarity.rename('z') for similarity in data_arrays])['z'].rename(None)
-        # ensure same class
-        return type(data_arrays[0])(merged)
+        # # https://stackoverflow.com/a/50125997/2225200
+        # merged = xr.merge([similarity.rename('z') for similarity in data_arrays])['z'].rename(None)
+        # # ensure same class
+
+        from brainio.assemblies import walk_coords
+        nonneuroid_coords = {coord: (dims, values) for coord, dims, values in walk_coords(data_arrays[0])
+                             if set(dims) != {'neuroid'}}
+        neuroid_coords = [(coord, dims) for layer_assembly in data_arrays for coord, dims, values in walk_coords(layer_assembly)
+                             if set(dims) == {'neuroid'} and coord!='neuroid']
+        neuroid_coord_names = set(neuroid_coords)
+        neuroid_coords = {}
+
+        for layer_assembly in data_arrays:
+            for coord, _ in neuroid_coord_names:
+                try:
+                    coord_values = layer_assembly[coord].values
+                except KeyError:
+                    coord_values = np.full(layer_assembly.sizes['neuroid'], -1, dtype=int)
+                neuroid_coords.setdefault(coord, []).append(coord_values)
+
+            assert data_arrays[0].dims == layer_assembly.dims
+            for dim in set(layer_assembly.dims) - {'neuroid'}:
+                for coord, _, _ in walk_coords(layer_assembly[dim]):
+                    assert (layer_assembly[coord].values == data_arrays[0][coord].values).all()
+
+        for coord, dims in neuroid_coord_names:
+            neuroid_coords[coord] = (dims, np.concatenate(neuroid_coords[coord]))
+
+        combined = np.concatenate([a.values for a in data_arrays], axis=data_arrays[0].dims.index('neuroid'))
+        combined = type(data_arrays[0])(combined, coords={**nonneuroid_coords, **neuroid_coords},dims=data_arrays[0].dims)
+
+        return combined
 
     def ensure_callargs_present(self, result, infile_call_args):
         # make sure coords are set equal to call_args
